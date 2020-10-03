@@ -10,74 +10,76 @@ trigger:
 - master
 - refs/tags/v*
 
-pool:
-  vmImage: windows-latest  
+jobs:
+- job: Build
+  pool:
+    vmImage: windows-latest  
 
-variables:
-  buildConfiguration: 'Release'
+  variables:
+    buildConfiguration: 'Release'
 
-steps:
-- task: UseGitVersion@5
-  inputs:
-    versionSpec: '5.x'
-
-- task: DotNetCoreCLI@2
-  displayName: dotnet restore
-  inputs:
-    command: 'restore'
-    restoreArguments: '--disable-parallel'
-    feedsToUse: 'config'
-    nugetConfigPath: './nuget.config'
-
-- task: DotNetCoreCLI@2
-  displayName: dotnet build
-  inputs:
-    command: build
-    projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfiguration) --no-restore'
-  
-- task: DotNetCoreCLI@2
-  displayName: dotnet test
-  inputs:
-    command: test
-    projects: '**/*Tests/*.csproj'
-    arguments: '--configuration $(buildConfiguration) --collect "Code coverage" --no-build'
-  
-- task: DotNetCoreCLI@2
-  displayName: dotnet pack
-  inputs:
-    command: 'pack'
-    packagesToPack: '**/*.csproj'
-    packDirectory: '$(Build.ArtifactStagingDirectory)\packages'
-    versioningScheme: 'off'
-    
-- task: PublishBuildArtifacts@1
-  displayName: publish nuget artifacts
-  inputs:
-    PathtoPublish: '$(Build.ArtifactStagingDirectory)\packages'
-    ArtifactName: 'packages'
-    publishLocation: 'Container'
-
-- task: NuGetCommand@2
-  displayName: publish to project nuget repo
-  inputs:
-    command: 'push'
-    packagesToPush: '$(Build.ArtifactStagingDirectory)/**/*.nupkg;!$(Build.ArtifactStagingDirectory)/**/*.symbols.nupkg'
-    nuGetFeedType: 'internal'
-    publishVstsFeed: '59a3608a-9bed-4cb4-9467-6efaaa3cbef5/1e425ef4-e3a0-4927-b4c0-2beff753cb88'   
-
-- ${{ if eq(parameters.withCmdlet, true) }}:
-  - task: PowerShell@2
-    displayName: generate cmdlet
+  steps:
+  - task: UseGitVersion@5
     inputs:
-      filePath: 'build/build-cmdlet.ps1'
-      arguments: '-Configuration $(BuildConfiguration) -OutputDir $(Build.ArtifactStagingDirectory)' 
+      versionSpec: '5.x'
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet restore
+    inputs:
+      command: 'restore'
+      restoreArguments: '--disable-parallel'
+      feedsToUse: 'config'
+      nugetConfigPath: './nuget.config'
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet build
+    inputs:
+      command: build
+      projects: '**/*.csproj'
+      arguments: '--configuration $(buildConfiguration) --no-restore'
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet test
+    inputs:
+      command: test
+      projects: '**/*Tests/*.csproj'
+      arguments: '--configuration $(buildConfiguration) --collect "Code coverage" --no-build'
+
+  - task: DotNetCoreCLI@2
+    displayName: dotnet pack
+    inputs:
+      command: 'pack'
+      packagesToPack: '**/*.csproj'
+      packDirectory: '$(Build.ArtifactStagingDirectory)\packages'
+      versioningScheme: 'off'
 
   - task: PublishBuildArtifacts@1
-    displayName: publish cmdlet artifacts
+    displayName: publish nuget artifacts
     inputs:
-      PathtoPublish: '$(Build.ArtifactStagingDirectory)\cmdlet'
-      ArtifactName: 'cmdlet'
+      PathtoPublish: '$(Build.ArtifactStagingDirectory)\packages'
+      ArtifactName: 'packages'
       publishLocation: 'Container'
+
+  - task: NuGetCommand@2
+    displayName: publish to project nuget repo
+    inputs:
+      command: 'push'
+      packagesToPush: '$(Build.ArtifactStagingDirectory)/**/*.nupkg;!$(Build.ArtifactStagingDirectory)/**/*.symbols.nupkg'
+      nuGetFeedType: 'internal'
+      publishVstsFeed: '59a3608a-9bed-4cb4-9467-6efaaa3cbef5/1e425ef4-e3a0-4927-b4c0-2beff753cb88'   
+
+  - ${{ if eq(parameters.withCmdlet, true) }}:
+    - task: PowerShell@2
+      displayName: generate cmdlet
+      inputs:
+        filePath: 'build/build-cmdlet.ps1'
+        arguments: '-Configuration $(BuildConfiguration) -OutputDir $(Build.ArtifactStagingDirectory)' 
+
+    - task: PublishBuildArtifacts@1
+      displayName: publish cmdlet artifacts
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)\cmdlet'
+        ArtifactName: 'cmdlet'
+        publishLocation: 'Container'
     
 
