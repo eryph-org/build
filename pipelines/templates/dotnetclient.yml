@@ -44,7 +44,7 @@ jobs:
     inputs:
       command: test
       projects: '**/*Tests/*.csproj'
-      arguments: '--configuration $(buildConfiguration) --collect "Code coverage" --no-build'
+      arguments: '--configuration $(buildConfiguration) --no-build'
 
   - task: DotNetCoreCLI@2
     displayName: dotnet pack
