@@ -73,6 +73,7 @@ jobs:
     - task: PowerShell@2
       displayName: generate cmdlet
       inputs:
+        pwsh: true
         filePath: 'build/build-cmdlet.ps1'
         arguments: '-Configuration $(BuildConfiguration) -OutputDir $(Build.ArtifactStagingDirectory)' 
 
