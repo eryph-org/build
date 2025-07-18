@@ -21,12 +21,12 @@ jobs:
 
   steps:
   - task: gitversion/setup@3.1.11
-    displayName: Install GitVersion
-    inputs:
-      versionSpec: '5.11.x'
+    displayName: Install GitVersion
+    inputs:
+      versionSpec: '5.11.x'
       
   - task: gitversion/execute@3.1.11
-    displayName: Execute GitVersion
+    displayName: Execute GitVersion
 
   - task: DotNetCoreCLI@2
     displayName: dotnet restore
