@@ -20,9 +20,13 @@ jobs:
     buildConfiguration: 'Release'
 
   steps:
-  - task: UseGitVersion@5
-    inputs:
-      versionSpec: '5.11.x'
+  - task: gitversion/setup@3.1.11
+    displayName: Install GitVersion
+    inputs:
+      versionSpec: '5.11.x'
+      
+  - task: gitversion/execute@3.1.11
+    displayName: Execute GitVersion
 
   - task: DotNetCoreCLI@2
     displayName: dotnet restore
