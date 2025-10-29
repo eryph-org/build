@@ -28,13 +28,11 @@ jobs:
   - task: gitversion/execute@3.1.11
     displayName: Execute GitVersion
 
-  - task: DotNetCoreCLI@2
-    displayName: dotnet restore
+  - task: PowerShell@2
+    displayName: 'dotnet restore'
     inputs:
-      command: 'restore'
-      restoreArguments: '--disable-parallel'
-      feedsToUse: 'config'
-      nugetConfigPath: './nuget.config'
+      targetType: 'inline'
+      script: 'dotnet restore'
 
   - task: DotNetCoreCLI@2
     displayName: dotnet build
