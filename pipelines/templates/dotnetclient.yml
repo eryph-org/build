@@ -25,24 +25,6 @@ jobs:
     inputs:
       versionSpec: '6.6.x'
 
-  # Workaround: Azure DevOps sets BUILD_SOURCEBRANCH to refs/tags/... for tag builds,
-  # causing GitVersion to fail in detached HEAD mode (see https://github.com/GitTools/GitVersion/issues/4534).
-  # Setting GIT_BRANCH to the branch containing the tag lets GitVersion resolve the version correctly.
-  - powershell: |
-      $sourceBranch = "$(Build.SourceBranch)"
-      if ($sourceBranch.StartsWith("refs/tags/")) {
-          $tagCommit = git rev-list -n 1 "$sourceBranch"
-          $containingBranch = git branch -r --contains $tagCommit |
-              Where-Object { $_ -match 'origin/(main|master)' } |
-              Select-Object -First 1
-          if ($containingBranch) {
-              $branchName = $containingBranch.Trim().Replace("origin/", "")
-              Write-Host "Tag build detected - setting GIT_BRANCH to refs/heads/$branchName"
-              Write-Host "##vso[task.setvariable variable=GIT_BRANCH]refs/heads/$branchName"
-          }
-      }
-    displayName: 'Resolve branch for tag builds'
-
   - task: gitversion/execute@3
     displayName: Execute GitVersion
 
