@@ -20,7 +20,7 @@ jobs:
     buildConfiguration: 'Release'
 
   steps:
-  - task: gitversion/setup@3.1.11
+  - task: gitversion/setup@3
     displayName: Install GitVersion
     inputs:
       versionSpec: '6.6.x'
@@ -43,7 +43,7 @@ jobs:
       }
     displayName: 'Resolve branch for tag builds'
 
-  - task: gitversion/execute@3.1.11
+  - task: gitversion/execute@3
     displayName: Execute GitVersion
 
   - task: DotNetCoreCLI@2
