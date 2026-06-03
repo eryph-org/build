@@ -2,15 +2,25 @@
 
 ## TL;DR
 
-The .NET client repos (those that `extends` [`pipelines/templates/dotnetclient.yml`](../pipelines/templates/dotnetclient.yml))
-are **pinned to GitVersion 5.11.x**. Do **not** bump them to GitVersion 6 without
-first migrating every consumer's `gitversion.yml` **and** solving pre-release-tag
-handling. A naive bump silently breaks versioning:
+The .NET client repos extend [`pipelines/templates/dotnetclient.yml`](../pipelines/templates/dotnetclient.yml).
+They were **pinned to GitVersion 5.11.x** because a naive bump to GitVersion 6
+silently breaks versioning:
 
 * untagged `main` builds publish **released** versions (`0.15.0`) instead of
   CI pre-releases (`0.15.0-ci.<n>`), and
 * release tags such as `v0.15.0-beta.1` are **not** honoured — they finalize to
   a stable `0.15.0`.
+
+A **validated permanent fix** now exists (see
+[Permanent fix on GitVersion 6](#permanent-fix-on-gitversion-6)). In short:
+GitVersion computes **branch (CI) builds** only; **tag builds take the version
+verbatim from the tag name** and skip GitVersion entirely. This is the only way
+to satisfy all rows below on GitVersion 6 — a maintainer has
+[confirmed](https://github.com/GitTools/GitVersion/discussions/4696) that a single
+GitVersion config cannot produce both `ci`-on-`main` **and** verbatim pre-release
+tags. The template change must be rolled out **together** with the per-consumer
+migration (`gitversion.yml` v6 schema + `GitVersion.MsBuild` 6.x), because builds
+resolve the template from `build`'s default branch at queue time.
 
 The desired behaviour is:
 
@@ -179,20 +189,97 @@ module prerelease `beta0020`.
 > then run GitVersion. The plain (LocalBuild) runs above already demonstrate the
 > version contrast without that setup.
 
-## If/when migrating to GitVersion 6
+## Permanent fix on GitVersion 6
 
-A clean v6 migration must, **for every consumer at once**:
+The shared template now targets **GitVersion 6.7.x** using a split that matches
+the GitHub-flow release model (CI pre-releases on `main`, named tags = releases):
 
-1. Rewrite each `gitversion.yml` to the v6 schema — move `mode` under
-   `branches: main:` and use **`ContinuousDelivery`** (not `ContinuousDeployment`)
-   with `label: ci` to keep `X.Y.Z-ci.<n>`.
-2. Bump `GitVersion.MsBuild` to the matching 6.x in every `Directory.Build.props`.
-3. Replace the removed `NuGet*` variables in the PS-module packaging — build the
-   alphanumeric prerelease from `PreReleaseLabel` + zero-padded `PreReleaseNumber`.
-4. **Solve pre-release tags**, which v6 will not honour on `main`. The robust
-   option is a template step that, for `refs/tags/v*` builds, derives the version
-   directly from the tag name (strip the leading `v`) instead of letting
-   GitVersion recompute it.
+* **Branch (CI) builds** — GitVersion computes the version. With the v6 config
+  below, `main` produces `X.Y.Z-ci.<n>`.
+* **Tag builds (`refs/tags/v*`)** — the version is taken **verbatim from the tag
+  name** (minus the leading `v`). GitVersion is **not** run at all: the
+  `gitversion/execute` task is skipped, and `GitVersion.MsBuild` is disabled
+  during `pack` via `-p:DisableGitVersionTask=true -p:Version=<tag>`.
 
-Validate the full matrix in the test repo above before changing the shared
-template, since the template change affects all consumers simultaneously.
+### Why tag builds must bypass GitVersion
+
+This is **by design** in GitVersion 6, not a misconfiguration on our side:
+
+* A pre-release tag's label is only honoured when it **matches the branch's
+  configured `label`** (v6
+  [BREAKING_CHANGES](https://github.com/GitTools/GitVersion/blob/main/BREAKING_CHANGES.md)).
+  So `label: ci` (needed for CI builds) makes v6 **relabel** a `beta` tag to
+  `ci`, or finalise it to stable. `label: ''`/`null` loses the `ci` label.
+  Verified with all three label modes — none satisfy the matrix.
+* A GitVersion maintainer has
+  [confirmed](https://github.com/GitTools/GitVersion/discussions/4696) (Oct 2025)
+  that producing `ci` on untagged commits **and** verbatim pre-release tags from
+  one config is *"not possible"*.
+* On Azure DevOps, tag builds check out a **detached HEAD** with
+  `BUILD_SOURCEBRANCH=refs/tags/v*`; GitVersion 6 then falls back to `-no-branch-`
+  ([#4534](https://github.com/GitTools/GitVersion/issues/4534), closed without a
+  fix). Bypassing GitVersion for tags sidesteps this entirely.
+
+This combination (CI-on-`main` + tag-as-release-version on Azure DevOps) has been
+reported upstream repeatedly since 2020 (e.g.
+[#2231](https://github.com/GitTools/GitVersion/issues/2231),
+[#2362](https://github.com/GitTools/GitVersion/issues/2362),
+[#4015](https://github.com/GitTools/GitVersion/issues/4015)) and never got a
+complete upstream fix; deriving the version from the tag is the accepted
+pragmatic solution.
+
+> **Alternative considered — `label: beta`.** Setting `main`'s `label: beta`
+> reproduces v5 behaviour (verbatim `beta` tags *and* beta lineage) with no
+> pipeline logic, but labels untagged CI builds `beta.<n>` instead of `ci.<n>`
+> and silently relabels any non-`beta` pre-release tag (`alpha`, `rc`). Rejected
+> because we want `ci` for CI builds and a label-agnostic release path.
+
+### Validation
+
+Proven end-to-end on real Azure DevOps builds (GitVersion 6.7.0), at both the
+pipeline level (build number) and the package level (`dotnet pack` output):
+
+| Scenario                               | Checkout      | Version produced  |
+| -------------------------------------- | ------------- | ----------------- |
+| commit on `main` (untagged)            | normal        | `X.Y.Z-ci.<n>`    |
+| tag `vX.Y.Z-beta.1`                    | detached HEAD | `X.Y.Z-beta.1`    |
+| tag `vX.Y.Z`                           | detached HEAD | `X.Y.Z`           |
+
+Note: untagged CI builds after a pre-release tag now carry `-ci.<n>` (not the v5
+`-beta.<n>` lineage). NuGet ordering is preserved (`beta` < `ci`), and CI builds
+go to the internal feed while releases come from tags, so they do not collide.
+
+### Per-consumer migration (required, all consumers together)
+
+The template change must land **with** these per-consumer changes, since builds
+resolve the template from `build`'s default branch at queue time:
+
+1. Rewrite each `gitversion.yml` to the v6 schema:
+   ```yaml
+   assembly-versioning-scheme: MajorMinor
+   branches:
+     main:
+       deployment-mode: ContinuousDelivery   # v5 'ContinuousDeployment' == v6 'ContinuousDelivery'
+       label: ci
+   ```
+2. Bump `GitVersion.MsBuild` to **6.7.x** in every `Directory.Build.props` (or, for
+   repos without one, in each project file — e.g. `dotnet-commonclient`).
+
+That is the **entire** per-consumer change. The PowerShell-module versioning
+(`withCmdlet` repos) is handled **centrally by the template**: GitVersion 6 dropped
+the `GitVersion_NuGet*` outputs, so the template reconstructs `NuGetPreReleaseTag`
+(`label` + 4-digit zero-padded number, e.g. `ci0001`, `beta0020`) and `MajorMinorPatch`
+for **both** build kinds and injects them —
+
+* as MSBuild properties (`-p:GitVersion_MajorMinorPatch=… -p:GitVersion_NuGetPreReleaseTag=…`)
+  for repos that stamp the module during build via `Prepare-PsModule.ps1`
+  (`dotnet-computeclient`, `dotnet-clientruntime`, `dotnet-identityclient`), and
+* as `GITVERSION_*` pipeline/environment variables for repos whose cmdlet step reads
+  them directly (`dotnet-commonclient`).
+
+So `Prepare-PsModule.ps1` / `build-cmdlet.ps1` keep working unchanged. On tag builds
+this matters doubly: GitVersion.MsBuild is disabled there, so without the injected
+`GitVersion_MajorMinorPatch` the module build would fail its version validation.
+
+The repro harness in [Clean reproduction on a test repo](#clean-reproduction-on-a-test-repo)
+above validates the matrix locally before any consumer is changed.

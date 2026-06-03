@@ -1,4 +1,4 @@
-  
+
 # dotnet client build pipeline
 
 parameters:
@@ -14,19 +14,90 @@ trigger:
 jobs:
 - job: Build
   pool:
-    vmImage: windows-latest  
+    vmImage: windows-latest
 
   variables:
     buildConfiguration: 'Release'
 
   steps:
-  - task: gitversion/setup@3.1.11
+  # fetchDepth: 0 -> full history + tags so GitVersion can compute CI builds.
+  # The default shallow checkout hides the baseline tag and yields 0.0.1-ci.<n>.
+  - checkout: self
+    fetchDepth: 0
+
+  # The task is pinned to the @3 major (latest 3.x); GitVersion 6.6+ requires it
+  # (the older @3.1.11 caps the CLI at < 6.1.0). The CLI itself is pinned via versionSpec.
+  - task: gitversion/setup@3
     displayName: Install GitVersion
     inputs:
-      versionSpec: '5.11.x'
+      versionSpec: '6.7.x'
 
-  - task: gitversion/execute@3.1.11
+  # GitHub-flow version resolution:
+  #   refs/tags/v*  -> released version taken verbatim from the tag name (minus 'v').
+  #                    GitVersion is NOT used for tag builds - neither this task (skipped
+  #                    below) nor GitVersion.MsBuild during pack (DisableGitVersionTask).
+  #                    This honours pre-release tags verbatim (which GitVersion 6 would
+  #                    otherwise relabel/finalise) and sidesteps the Azure detached-HEAD
+  #                    bug GitTools/GitVersion#4534.
+  #   anything else -> CI build; GitVersion computes X.Y.Z-ci.<n>.
+  - powershell: |
+      $src = "$(Build.SourceBranch)"
+      Write-Host "Build.SourceBranch = $src"
+      if ($src -like 'refs/tags/v*') {
+          $ver = $src.Substring('refs/tags/v'.Length)
+          # Accept only a plain SemVer (optionally with a pre-release label). This rejects
+          # empty/malformed tags, build metadata ('+'), and any characters that could be
+          # injected into the ##vso[...] logging commands or MSBuild properties below.
+          if ($ver -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+              Write-Error "Tag '$src' is not a valid release version (expected vX.Y.Z[-prerelease])."
+              exit 1
+          }
+          # Reconstruct the PowerShell-module version parts (GitVersion 6 dropped the
+          # NuGet* outputs). NuGetPreReleaseTag = label + 4-digit zero-padded number,
+          # matching GitVersion 5 (e.g. v0.15.0-beta.1 -> beta0001, v0.16.0 -> stable).
+          $mmp = ($ver -split '-', 2)[0]
+          $psTag = ''
+          if ($ver -match '-([A-Za-z]+)[.\-]?([0-9]+)') {
+              $psTag = $matches[1] + $matches[2].PadLeft(4, '0')
+          } elseif ($ver -match '-(.+)$') {
+              $psTag = ($matches[1] -replace '[^0-9A-Za-z]', '')
+          }
+          Write-Host "Tag build -> $ver (MajorMinorPatch=$mmp, NuGetPreReleaseTag=$psTag)"
+          Write-Host "##vso[task.setvariable variable=isTagBuild]true"
+          Write-Host "##vso[task.setvariable variable=versionBuildArgs]-p:DisableGitVersionTask=true -p:Version=$ver -p:GitVersion_MajorMinorPatch=$mmp -p:GitVersion_NuGetPreReleaseTag=$psTag"
+          Write-Host "##vso[task.setvariable variable=versionPackProps]DisableGitVersionTask=true;Version=$ver;GitVersion_MajorMinorPatch=$mmp;GitVersion_NuGetPreReleaseTag=$psTag"
+          # Env vars for repos whose cmdlet step reads GITVERSION_* (e.g. dotnet-commonclient).
+          Write-Host "##vso[task.setvariable variable=GITVERSION_MajorMinorPatch]$mmp"
+          Write-Host "##vso[task.setvariable variable=GITVERSION_NuGetPreReleaseTag]$psTag"
+          Write-Host "##vso[build.updatebuildnumber]$ver"
+      } else {
+          Write-Host "Branch build -> GitVersion computes the version"
+          Write-Host "##vso[task.setvariable variable=isTagBuild]false"
+          Write-Host "##vso[task.setvariable variable=versionBuildArgs]"
+          Write-Host "##vso[task.setvariable variable=versionPackProps]"
+      }
+    displayName: 'Resolve version source'
+
+  # Branch (CI) builds only. On tag builds the version comes from the tag (above).
+  - task: gitversion/execute@3
     displayName: Execute GitVersion
+    condition: ne(variables['isTagBuild'], 'true')
+
+  # Branch builds: rebuild the NuGetPreReleaseTag that GitVersion 6 no longer emits,
+  # from the v6 PreReleaseLabel + PreReleaseNumber (e.g. ci + 1 -> ci0001). MajorMinorPatch
+  # still comes from GitVersion.MsBuild during build; only the pre-release label is injected.
+  - pwsh: |
+      $label = '$(GitVersion.PreReleaseLabel)'
+      $number = 0; [void][int]::TryParse('$(GitVersion.PreReleaseNumber)', [ref]$number)
+      $psTag = ''
+      if (-not [string]::IsNullOrWhiteSpace($label)) { $psTag = $label + $number.ToString('0000') }
+      Write-Host "Branch build -> MajorMinorPatch=$(GitVersion.MajorMinorPatch), NuGetPreReleaseTag=$psTag"
+      Write-Host "##vso[task.setvariable variable=versionBuildArgs]-p:GitVersion_NuGetPreReleaseTag=$psTag"
+      Write-Host "##vso[task.setvariable variable=versionPackProps]GitVersion_NuGetPreReleaseTag=$psTag"
+      Write-Host "##vso[task.setvariable variable=GITVERSION_MajorMinorPatch]$(GitVersion.MajorMinorPatch)"
+      Write-Host "##vso[task.setvariable variable=GITVERSION_NuGetPreReleaseTag]$psTag"
+    displayName: 'Compose PowerShell module version (branch builds)'
+    condition: ne(variables['isTagBuild'], 'true')
 
   - task: DotNetCoreCLI@2
     displayName: dotnet restore
@@ -41,7 +112,7 @@ jobs:
     inputs:
       command: build
       projects: '**/*.csproj'
-      arguments: '--configuration $(buildConfiguration) --no-restore'
+      arguments: '--configuration $(buildConfiguration) --no-restore $(versionBuildArgs)'
 
   - task: DotNetCoreCLI@2
     displayName: dotnet test
@@ -57,6 +128,7 @@ jobs:
       packagesToPack: '**/*.csproj'
       packDirectory: '$(Build.ArtifactStagingDirectory)\packages'
       versioningScheme: 'off'
+      buildProperties: '$(versionPackProps)'
 
   - task: PublishBuildArtifacts@1
     displayName: publish nuget artifacts
@@ -71,7 +143,7 @@ jobs:
       command: 'push'
       packagesToPush: '$(Build.ArtifactStagingDirectory)/**/*.nupkg;!$(Build.ArtifactStagingDirectory)/**/*.symbols.nupkg'
       nuGetFeedType: 'internal'
-      publishVstsFeed: '59a3608a-9bed-4cb4-9467-6efaaa3cbef5/1e425ef4-e3a0-4927-b4c0-2beff753cb88'   
+      publishVstsFeed: '59a3608a-9bed-4cb4-9467-6efaaa3cbef5/1e425ef4-e3a0-4927-b4c0-2beff753cb88'
 
   - ${{ if eq(parameters.withCmdlet, true) }}:
     - task: PowerShell@2
@@ -79,7 +151,7 @@ jobs:
       inputs:
         pwsh: true
         filePath: 'build/build-cmdlet.ps1'
-        arguments: '-Configuration $(BuildConfiguration) -OutputDir $(Build.ArtifactStagingDirectory)' 
+        arguments: '-Configuration $(BuildConfiguration) -OutputDir $(Build.ArtifactStagingDirectory)'
 
     - task: PublishBuildArtifacts@1
       displayName: publish cmdlet artifacts
@@ -87,5 +159,5 @@ jobs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)\cmdlet'
         ArtifactName: 'cmdlet'
         publishLocation: 'Container'
-    
+
 
