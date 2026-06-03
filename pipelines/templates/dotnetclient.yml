@@ -52,10 +52,23 @@ jobs:
               Write-Error "Tag '$src' is not a valid release version (expected vX.Y.Z[-prerelease])."
               exit 1
           }
-          Write-Host "Tag build -> released version: $ver"
+          # Reconstruct the PowerShell-module version parts (GitVersion 6 dropped the
+          # NuGet* outputs). NuGetPreReleaseTag = label + 4-digit zero-padded number,
+          # matching GitVersion 5 (e.g. v0.15.0-beta.1 -> beta0001, v0.16.0 -> stable).
+          $mmp = ($ver -split '-', 2)[0]
+          $psTag = ''
+          if ($ver -match '-([A-Za-z]+)[.\-]?([0-9]+)') {
+              $psTag = $matches[1] + $matches[2].PadLeft(4, '0')
+          } elseif ($ver -match '-(.+)$') {
+              $psTag = ($matches[1] -replace '[^0-9A-Za-z]', '')
+          }
+          Write-Host "Tag build -> $ver (MajorMinorPatch=$mmp, NuGetPreReleaseTag=$psTag)"
           Write-Host "##vso[task.setvariable variable=isTagBuild]true"
-          Write-Host "##vso[task.setvariable variable=versionBuildArgs]-p:DisableGitVersionTask=true -p:Version=$ver"
-          Write-Host "##vso[task.setvariable variable=versionPackProps]DisableGitVersionTask=true;Version=$ver"
+          Write-Host "##vso[task.setvariable variable=versionBuildArgs]-p:DisableGitVersionTask=true -p:Version=$ver -p:GitVersion_MajorMinorPatch=$mmp -p:GitVersion_NuGetPreReleaseTag=$psTag"
+          Write-Host "##vso[task.setvariable variable=versionPackProps]DisableGitVersionTask=true;Version=$ver;GitVersion_MajorMinorPatch=$mmp;GitVersion_NuGetPreReleaseTag=$psTag"
+          # Env vars for repos whose cmdlet step reads GITVERSION_* (e.g. dotnet-commonclient).
+          Write-Host "##vso[task.setvariable variable=GITVERSION_MajorMinorPatch]$mmp"
+          Write-Host "##vso[task.setvariable variable=GITVERSION_NuGetPreReleaseTag]$psTag"
           Write-Host "##vso[build.updatebuildnumber]$ver"
       } else {
           Write-Host "Branch build -> GitVersion computes the version"
@@ -68,6 +81,22 @@ jobs:
   # Branch (CI) builds only. On tag builds the version comes from the tag (above).
   - task: gitversion/execute@3
     displayName: Execute GitVersion
+    condition: ne(variables['isTagBuild'], 'true')
+
+  # Branch builds: rebuild the NuGetPreReleaseTag that GitVersion 6 no longer emits,
+  # from the v6 PreReleaseLabel + PreReleaseNumber (e.g. ci + 1 -> ci0001). MajorMinorPatch
+  # still comes from GitVersion.MsBuild during build; only the pre-release label is injected.
+  - pwsh: |
+      $label = '$(GitVersion.PreReleaseLabel)'
+      $number = 0; [void][int]::TryParse('$(GitVersion.PreReleaseNumber)', [ref]$number)
+      $psTag = ''
+      if (-not [string]::IsNullOrWhiteSpace($label)) { $psTag = $label + $number.ToString('0000') }
+      Write-Host "Branch build -> MajorMinorPatch=$(GitVersion.MajorMinorPatch), NuGetPreReleaseTag=$psTag"
+      Write-Host "##vso[task.setvariable variable=versionBuildArgs]-p:GitVersion_NuGetPreReleaseTag=$psTag"
+      Write-Host "##vso[task.setvariable variable=versionPackProps]GitVersion_NuGetPreReleaseTag=$psTag"
+      Write-Host "##vso[task.setvariable variable=GITVERSION_MajorMinorPatch]$(GitVersion.MajorMinorPatch)"
+      Write-Host "##vso[task.setvariable variable=GITVERSION_NuGetPreReleaseTag]$psTag"
+    displayName: 'Compose PowerShell module version (branch builds)'
     condition: ne(variables['isTagBuild'], 'true')
 
   - task: DotNetCoreCLI@2

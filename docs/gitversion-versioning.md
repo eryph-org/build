@@ -262,13 +262,24 @@ resolve the template from `build`'s default branch at queue time:
        deployment-mode: ContinuousDelivery   # v5 'ContinuousDeployment' == v6 'ContinuousDelivery'
        label: ci
    ```
-2. Bump `GitVersion.MsBuild` to **6.7.x** in every `Directory.Build.props`.
-3. **`withCmdlet` repos only:** the PS-module packaging uses the removed
-   `GitVersion_NuGetPreReleaseTag` (e.g. `beta0020`). Rebuild it in
-   `build/build-cmdlet.ps1` — for branch builds from `PreReleaseLabel` +
-   zero-padded `PreReleaseNumber`; for tag builds from the tag's pre-release
-   component. This is **not** solved by the template and must be handled in each
-   cmdlet-producing consumer.
+2. Bump `GitVersion.MsBuild` to **6.7.x** in every `Directory.Build.props` (or, for
+   repos without one, in each project file — e.g. `dotnet-commonclient`).
+
+That is the **entire** per-consumer change. The PowerShell-module versioning
+(`withCmdlet` repos) is handled **centrally by the template**: GitVersion 6 dropped
+the `GitVersion_NuGet*` outputs, so the template reconstructs `NuGetPreReleaseTag`
+(`label` + 4-digit zero-padded number, e.g. `ci0001`, `beta0020`) and `MajorMinorPatch`
+for **both** build kinds and injects them —
+
+* as MSBuild properties (`-p:GitVersion_MajorMinorPatch=… -p:GitVersion_NuGetPreReleaseTag=…`)
+  for repos that stamp the module during build via `Prepare-PsModule.ps1`
+  (`dotnet-computeclient`, `dotnet-clientruntime`, `dotnet-identityclient`), and
+* as `GITVERSION_*` pipeline/environment variables for repos whose cmdlet step reads
+  them directly (`dotnet-commonclient`).
+
+So `Prepare-PsModule.ps1` / `build-cmdlet.ps1` keep working unchanged. On tag builds
+this matters doubly: GitVersion.MsBuild is disabled there, so without the injected
+`GitVersion_MajorMinorPatch` the module build would fail its version validation.
 
 The repro harness in [Clean reproduction on a test repo](#clean-reproduction-on-a-test-repo)
 above validates the matrix locally before any consumer is changed.
