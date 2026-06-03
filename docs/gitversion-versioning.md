@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-The .NET client repos `extends` [`pipelines/templates/dotnetclient.yml`](../pipelines/templates/dotnetclient.yml).
+The .NET client repos extend [`pipelines/templates/dotnetclient.yml`](../pipelines/templates/dotnetclient.yml).
 They were **pinned to GitVersion 5.11.x** because a naive bump to GitVersion 6
 silently breaks versioning:
 

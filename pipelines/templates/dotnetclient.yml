@@ -45,8 +45,11 @@ jobs:
       Write-Host "Build.SourceBranch = $src"
       if ($src -like 'refs/tags/v*') {
           $ver = $src.Substring('refs/tags/v'.Length)
-          if ($ver -match '\+') {
-              Write-Error "Tag '$src' contains build metadata ('+'); not a valid NuGet package version."
+          # Accept only a plain SemVer (optionally with a pre-release label). This rejects
+          # empty/malformed tags, build metadata ('+'), and any characters that could be
+          # injected into the ##vso[...] logging commands or MSBuild properties below.
+          if ($ver -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+              Write-Error "Tag '$src' is not a valid release version (expected vX.Y.Z[-prerelease])."
               exit 1
           }
           Write-Host "Tag build -> released version: $ver"
