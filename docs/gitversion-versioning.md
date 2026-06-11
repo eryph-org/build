@@ -281,5 +281,30 @@ So `Prepare-PsModule.ps1` / `build-cmdlet.ps1` keep working unchanged. On tag bu
 this matters doubly: GitVersion.MsBuild is disabled there, so without the injected
 `GitVersion_MajorMinorPatch` the module build would fail its version validation.
 
+### The prerelease label must be purely alphanumeric
+
+A PowerShell-module prerelease string is **stricter than SemVer**. PowerShellGet
+validates it against `^[a-zA-Z0-9]+$` (see `ValidateAndGet-VersionPrereleaseStrings`
+in `PSModule.psm1`): **only ASCII letters and digits — no `.`, no `-`, no `+`.**
+SemVer 2.0 allows dots and hyphens in the prerelease (`ci.1`, `beta-20`); PowerShell
+does not. This is why the template emits `ci0001` / `beta0020` rather than the raw
+SemVer `ci.1` / `beta.20`.
+
+The trap: this constraint is **not** enforced by `dotnet build`, `dotnet pack`, or
+even `Test-ModuleManifest` — all of them happily accept `ci.1` or `beta-20`. It is
+only checked by `Publish-Module` at gallery-push time. So an invalid prerelease
+sails through the whole build and fails right at the end, at publication.
+
+Both reconstruction paths must therefore guarantee `^[a-zA-Z0-9]+$`:
+
+* **Tag builds** extract `([A-Za-z]+)` + zero-padded `([0-9]+)` from the tag, or
+  strip every non-alphanumeric character (`-replace '[^0-9A-Za-z]'`).
+* **Branch (CI) builds** take GitVersion's `PreReleaseLabel` and likewise strip
+  non-alphanumerics (`$label -replace '[^0-9A-Za-z]', ''`) before appending the
+  4-digit number. On `main` the label is the configured `ci`, but GitVersion derives
+  the label from the **branch name** on other builds, so it can contain hyphens
+  (e.g. `feature-x` → without sanitisation `feature-x0002`, which `Publish-Module`
+  rejects). The sanitisation keeps the label valid regardless of which branch builds.
+
 The repro harness in [Clean reproduction on a test repo](#clean-reproduction-on-a-test-repo)
 above validates the matrix locally before any consumer is changed.

@@ -89,6 +89,11 @@ jobs:
   - pwsh: |
       $label = '$(GitVersion.PreReleaseLabel)'
       $number = 0; [void][int]::TryParse('$(GitVersion.PreReleaseNumber)', [ref]$number)
+      # A PowerShell-module prerelease string must be purely alphanumeric (^[a-zA-Z0-9]+$) -
+      # stricter than SemVer, which also allows '.' and '-'. GitVersion derives the label from
+      # the branch name on non-main builds, so it can contain hyphens; strip any non-alphanumeric
+      # characters to match the sanitisation the tag-build path already applies.
+      $label = $label -replace '[^0-9A-Za-z]', ''
       $psTag = ''
       if (-not [string]::IsNullOrWhiteSpace($label)) { $psTag = $label + $number.ToString('0000') }
       Write-Host "Branch build -> MajorMinorPatch=$(GitVersion.MajorMinorPatch), NuGetPreReleaseTag=$psTag"
